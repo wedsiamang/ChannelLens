@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: channelLens
+  ai:
+    google:
+      genai:
+        api-key: your-gemini-api-key
+        embedding:
+          enabled: true
+          text:
+            options:
+               model: text-embedding-001
+
+  datasource:
+      url: jdbc:h2:file:./data/keywords
+      driver-class-name: org.h2.Driver
+      username: sa
+      password: 
+  jpa:
+      hibernate:
+        ddl-auto: update
+
+  h2:
+    console:
+      enabled: true
+
+slack:
+    bot-token: xoxb..
+    app-token: xapp..
+channel:
+    staff-user-id: UXXXXXXXXX
+    private-channel-id: CXXXXXXXXX
+    public-channel-id: CXXXXXXXXX
