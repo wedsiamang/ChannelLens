@@ -2,6 +2,8 @@ package com.example.channelLens.Config;
 
 import com.slack.api.bolt.App;
 import com.slack.api.bolt.AppConfig;
+import com.slack.api.methods.MethodsClient;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -32,6 +34,11 @@ public class SlackConfig {
                 .singleTeamBotToken(botToken)
                 .build();
     }
+
+   @Bean
+public MethodsClient methodsClient() {
+    return com.slack.api.Slack.getInstance().methods(botToken);
+}
 
     @Bean
     public App app(AppConfig appConfig) {
