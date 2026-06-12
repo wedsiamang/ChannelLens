@@ -5,8 +5,7 @@ import com.example.channelLens.Model.Message;
 import com.slack.api.bolt.App;
 import com.slack.api.bolt.socket_mode.SocketModeApp;
 import com.slack.api.methods.MethodsClient;
-
-import org.checkerframework.checker.units.qual.t;
+import com.example.channelLens.Service.JudgementService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
@@ -19,16 +18,28 @@ import com.example.channelLens.Repository.TicketRepository;
 import com.slack.api.model.event.MessageChangedEvent;
 import com.slack.api.model.event.MessageEvent;
 import com.slack.api.model.event.ReactionAddedEvent;
+
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-
-
+import com.slack.api.bolt.context.builtin.ActionContext;
+import com.slack.api.bolt.context.builtin.GlobalShortcutContext;
+import com.slack.api.bolt.request.builtin.BlockActionRequest;
+import com.slack.api.bolt.request.builtin.GlobalShortcutRequest;
+// Block Kit - ブロック本体
+import com.slack.api.model.block.Blocks;
+// Block Kit - 要素（ボタンなど）
+import com.slack.api.model.block.element.ButtonElement;
+// Block Kit - テキスト
+import com.slack.api.model.block.composition.PlainTextObject;
+// モーダル
+import com.slack.api.model.view.Views;
 
 
 @Component
 public class MessageHandler implements CommandLineRunner {
 
+    private final JudgementService judgementService;
     private final App app;
     private final SlackConfig slackConfig;
     private final MessageRepository messageRepository;
@@ -42,12 +53,14 @@ public class MessageHandler implements CommandLineRunner {
     private String publicChannelId;
 
     public MessageHandler(App app, SlackConfig slackConfig,MessageRepository 
-        messageRepository,EmbeddingService embeddingService,TicketRepository ticketRepository) {
+        messageRepository,EmbeddingService embeddingService,TicketRepository ticketRepository,
+    JudgementService judgementService) {
         this.app = app;
         this.slackConfig = slackConfig;
         this.messageRepository = messageRepository;
         this.embeddingService = embeddingService;
         this.ticketRepository = ticketRepository;
+        this.judgementService = judgementService;
     }
 
 @Override
@@ -56,6 +69,7 @@ public void run(String... args) throws Exception {
     app.event(MessageChangedEvent.class, (payload, ctx) -> {
     return ctx.ack();
 });
+  
 
     // メッセージイベント
     app.event(MessageEvent.class, (payload, ctx) -> {
@@ -126,49 +140,203 @@ ctx.client().chatPostMessage(r -> r
     return ctx.ack();
 });
 
-    // startボタン
-//     app.blockAction(Pattern.compile("start_.*"), (payload, ctx) -> {
-//         String messageTs = payload.getPayload().getActions().get(0)
-//             .getActionId().replace("start_", "");
-//         // ticketRepository.findByMessageTs(messageTs).ifPresentOrElse(
-//         //     t -> { /* 既存あり → 何もしない */ },
-//         //     () -> {
-//         List<Ticket> existing = ticketRepository.findByMessageTs(messageTs);
-// if (!existing.isEmpty()) {
-//     Ticket t = existing.get(0);
-//     t.setStartedAt(LocalDateTime.now());
-//     t.setStatus("対応中");
-//     ticketRepository.save(t);
-// }
-//   //      );
-//         return ctx.ack();
-//     });
+// MessageHandler の run() メソッド内、既存コードの後に追加
 
-    // resolveボタン
-//     app.blockAction(Pattern.compile("resolve_.*"), (payload, ctx) -> {
-//         String messageTs = payload.getPayload().getActions().get(0)
-//             .getActionId().replace("resolve_", "");
-//         double tsDouble = Double.parseDouble(messageTs);
-//         LocalDateTime postedAt = LocalDateTime.ofEpochSecond(
-//             (long) tsDouble, 0, java.time.ZoneOffset.of("+09:00"));
-//         // ticketRepository.findByMessageTs(messageTs).ifPresentOrElse(
-//         //     t -> {
-//         //         t.setStatus("解決済み");
-//         //         t.setResolvedAt(LocalDateTime.now());
-//         //         ticketRepository.save(t);
-//         //     },
-//         //     () -> {
+// ───────────────────────────────────────
+// ① ワークフロー起動ボタン（クロス申請）
+// ───────────────────────────────────────
+// ① cross_start
+app.blockAction("cross_start", (BlockActionRequest req, ActionContext ctx) -> {
+    ctx.client().viewsOpen(r -> r
+        .triggerId(req.getPayload().getTriggerId())
+        .view(Views.view(v -> v
+            .type("modal")
+            .callbackId("cross_select")
+            .title(Views.viewTitle(t ->
+                t.type("plain_text").text("クロス申請")))
+            .blocks(List.of(
+                Blocks.section(s -> s
+                    .text(MarkdownTextObject.builder()
+                        .text("申請内容を選択してください。").build())
+                ),
+                Blocks.actions(a -> a
+                    .blockId("select_block")
+                    .elements(List.of(
+                        ButtonElement.builder()
+                            .actionId("cross_apply")
+                            .text(PlainTextObject.builder()
+                                .text("📋 申請").build())
+                            .style("primary")
+                            .build(),
+                        ButtonElement.builder()
+                            .actionId("cross_other")
+                            .text(PlainTextObject.builder()
+                                .text("💬 その他の質問").build())
+                            .build()
+                    ))
+                )
+            ))
+        ))
+    );
+    return ctx.ack();
+});
 
-// List<Ticket> existing = ticketRepository.findByMessageTs(messageTs);
-// if (!existing.isEmpty()) {
-//     Ticket t = existing.get(0);
-//                 t.setStatus("解決済み");
-//                 t.setResolvedAt(LocalDateTime.now());
-//                 ticketRepository.save(t);
-//             }
-//       //  );
-//         return ctx.ack();
-//     });
+// ② cross_apply
+app.blockAction("cross_apply", (BlockActionRequest req, ActionContext ctx) -> {
+    ctx.client().viewsUpdate(r -> r
+        .viewId(req.getPayload().getView().getId())
+        .view(Views.view(v -> v
+            .type("modal")
+            .callbackId("cross_form")
+            .title(Views.viewTitle(t ->
+                t.type("plain_text").text("システム申請")))
+            .submit(Views.viewSubmit(s ->
+                s.type("plain_text").text("送信")))
+            .close(Views.viewClose(c ->
+                c.type("plain_text").text("キャンセル")))
+            .blocks(List.of(
+                Blocks.input(i -> i
+                    .blockId("system_block")
+                    .label(PlainTextObject.builder()
+                        .text("申請するシステム名").build())
+                    .element(com.slack.api.model.block.element
+                        .PlainTextInputElement.builder()
+                        .actionId("system_name_input")
+                        .placeholder(PlainTextObject.builder()
+                            .text("例: Slack, Figma").build())
+                        .build())
+                ),
+                Blocks.input(i -> i
+                    .blockId("dept_block")
+                    .label(PlainTextObject.builder()
+                        .text("所属部署").build())
+                    .element(com.slack.api.model.block.element
+                        .PlainTextInputElement.builder()
+                        .actionId("dept_input")
+                        .placeholder(PlainTextObject.builder()
+                            .text("例: 開発部、営業部").build())
+                        .build())
+                )
+            ))
+        ))
+    );
+    return ctx.ack();
+});
+
+// ③ cross_other
+app.blockAction("cross_other", (BlockActionRequest req, ActionContext ctx) -> {
+    ctx.client().viewsUpdate(r -> r
+        .viewId(req.getPayload().getView().getId())
+        .view(Views.view(v -> v
+            .type("modal")
+            .callbackId("cross_other_form")
+            .title(Views.viewTitle(t ->
+                t.type("plain_text").text("その他の質問")))
+            .submit(Views.viewSubmit(s ->
+                s.type("plain_text").text("送信")))
+            .close(Views.viewClose(c ->
+                c.type("plain_text").text("キャンセル")))
+            .blocks(List.of(
+                Blocks.input(i -> i
+                    .blockId("question_block")
+                    .label(PlainTextObject.builder()
+                        .text("質問内容").build())
+                    .element(com.slack.api.model.block.element
+                        .PlainTextInputElement.builder()
+                        .actionId("question_input")
+                        .multiline(true)
+                        .placeholder(PlainTextObject.builder()
+                            .text("質問内容を入力してください。").build())
+                        .build())
+                )
+            ))
+        ))
+    );
+    return ctx.ack();
+});
+
+// その他フォーム送信
+app.viewSubmission("cross_other_form", (req, ctx) -> {
+    String userId = req.getPayload().getUser().getId();
+    String question = req.getPayload().getView()
+        .getState().getValues()
+        .get("question_block")
+        .get("question_input")
+        .getValue();
+
+    // privateチャンネルに投稿
+    ctx.client().chatPostMessage(r -> r
+        .channel(privateChannelId)
+        .text(String.format(
+            "💬 <@%s> さんからの質問:\n%s\n\n担当者が確認しています。",
+            userId, question))
+    );
+    return ctx.ack();
+});
+
+// ───────────────────────────────────────
+// ④ フォーム送信 → ホワイトリスト判定
+// ───────────────────────────────────────
+app.viewSubmission("cross_form", (req, ctx) -> {
+    String userId = req.getPayload().getUser().getId();
+
+    // フォームから値を取得
+    String systemName = req.getPayload().getView()
+        .getState().getValues()
+        .get("system_block")
+        .get("system_name_input")
+        .getValue();
+
+    String department = req.getPayload().getView()
+        .getState().getValues()
+        .get("dept_block")
+        .get("dept_input")
+        .getValue();
+
+    // JudgementServiceで判定・投稿
+    judgementService.judge(systemName, department, userId);
+
+    return ctx.ack();
+});
+// ───────────────────────────────────────
+// ⑤ グローバルショートカット → 最初のモーダル表示
+// ───────────────────────────────────────
+app.globalShortcut("cross_request", (GlobalShortcutRequest req, GlobalShortcutContext ctx) -> {
+    ctx.client().viewsOpen(r -> r
+        .triggerId(req.getPayload().getTriggerId())
+        .view(Views.view(v -> v
+            .type("modal")
+            .callbackId("cross_select")
+            .title(Views.viewTitle(t ->
+                t.type("plain_text").text("クロス申請")))
+            .blocks(List.of(
+                Blocks.section(s -> s
+                    .text(MarkdownTextObject.builder()
+                        .text("申請内容を選択してください。").build())
+                ),
+                Blocks.actions(a -> a
+                    .blockId("select_block")
+                    .elements(List.of(
+                        ButtonElement.builder()
+                            .actionId("cross_apply")
+                            .text(PlainTextObject.builder()
+                                .text("📋 申請").build())
+                            .style("primary")
+                            .build(),
+                        ButtonElement.builder()
+                            .actionId("cross_other")
+                            .text(PlainTextObject.builder()
+                                .text("💬 その他の質問").build())
+                            .build()
+                    ))
+                )
+            ))
+        ))
+    );
+    return ctx.ack();
+});
+
+new SocketModeApp(slackConfig.getAppToken(), app).start();
 
     new SocketModeApp(slackConfig.getAppToken(), app).start();
 }
@@ -184,12 +352,7 @@ private void handle(String text, String channel, String ts, MethodsClient client
         String permalink = permalinkRes.getPermalink();
         // chatPostMessage の結果からtsを取得
 
-
-        // 2. キーワード検索
-   //     List<com.example.channelLens.Model.Message> results 
-       //     = messageRepository.findByTextContaining(text);
-
-// 1. 投稿テキストをEmbedding化
+        // 1. 投稿テキストをEmbedding化
 float[] queryVector = embeddingService.getEmbedding(text);
 
 // 2. H2の全メッセージを取得

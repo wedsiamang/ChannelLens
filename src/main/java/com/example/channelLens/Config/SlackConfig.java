@@ -36,7 +36,7 @@ public class SlackConfig {
     }
 
    @Bean
-public MethodsClient methodsClient() {
+   public MethodsClient methodsClient() {
     return com.slack.api.Slack.getInstance().methods(botToken);
 }
 
